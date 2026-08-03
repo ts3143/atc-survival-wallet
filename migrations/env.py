@@ -23,6 +23,8 @@ if config.config_file_name is not None:
 
 from src.db import Base  # noqa: E402
 from src import models  # noqa: E402,F401
+from scripts import bts_staging_schema  # noqa: E402,F401
+from jobs import schema as jobs_schema  # noqa: E402,F401
 
 target_metadata = Base.metadata
 

@@ -53,6 +53,8 @@ technical spec. This repository currently contains only project scaffolding
 
    `GET /health` should return `{"status": "ok"}`.
 
+5. **(M0) Generate BTS pool candidates:** see [`scripts/README.md`](scripts/README.md).
+
 ## Project layout
 
 ```

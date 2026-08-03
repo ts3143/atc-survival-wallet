@@ -5,3 +5,7 @@ venv/
 .env
 .DS_Store
 *.egg-info/
+
+# downloaded BTS zips + generated candidate CSVs — large, regenerable, not source
+scripts/.bts_cache/
+scripts/output/
