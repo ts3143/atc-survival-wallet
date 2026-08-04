@@ -19,5 +19,9 @@ class WalletPick(Base):
     staked_amount = Column(Numeric(14, 4), nullable=False)
     status = Column(wallet_pick_status_enum, nullable=False, server_default=text("'active'"))
     resolved_amount = Column(Numeric(14, 4), nullable=True)
+    # persisted state for incremental delay-penalty charging (spec section 7
+    # "Correct model") — excess-over-grace minutes already charged for this
+    # pick, so a static/unchanged delay isn't re-charged every tick.
+    last_charged_delay_minutes = Column(Numeric(8, 2), nullable=False, server_default=text("0"))
     cashed_out_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

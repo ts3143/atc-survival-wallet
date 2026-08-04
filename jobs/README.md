@@ -313,6 +313,140 @@ successful, 84 credits): full matching wired in for real.
   grace window — exactly the kind of drift `schedule_verifier.py` (M1)
   exists to catch, not a callsign-matching defect.
 
+## M3 — Wallet Engine
+
+Scoring logic lives in `src/lib/wallet_scoring.py` — pure functions, no DB,
+so the math is unit-testable independent of live data. `jobs/wallet_engine.py`
+is the thin DB-facing wrapper: for every active `wallet_pick`, look up its
+`flight_instance`'s current state, compute the volatility multiplier from
+`flight_volatility_stats.delay_stddev` vs the active-pool average, call
+`evaluate_tick()`, write the resulting `wallet_events` row(s), update
+`wallets.balance`, and resolve `wallet_picks.status`/`resolved_amount` if
+the tick was terminal. Wired into `opensky_poller.py` — runs once per poll,
+right after callsign matching, over every active pick regardless of which
+flight instance changed this cycle.
+
+```bash
+python -m jobs.wallet_engine   # manual run, e.g. for testing
+```
+
+Implements spec section 7's "Provisional v0" formula as literally as
+possible; every place the prose needed a concrete decision to become code
+is documented in `src/lib/wallet_scoring.py`'s module docstring (grace
+window semantics for in-progress vs landed flights, incremental delay
+charging, explicit terminality for cancellation/diversion, what "landed
+late" resolves to, and the unused `decay_tick` enum value). Read that
+docstring before changing the formula.
+
+**Tests**: `tests/test_wallet_scoring.py`, 25 pytest cases — the 4
+requested mocked scenarios (on-time throughout, delayed 20min, cancelled
+mid-flight, diverted) × low/high volatility, the landed/resolution paths,
+edge cases (early departure, missing volatility data), and 4 dedicated
+incremental-charging cases (static delay charges once then zero;
+increasing delay charges only each increment and sums to a single full
+charge; recovery-to-on-time resets the counter; landed-late only charges
+the increment beyond whatever was already billed in-progress). All
+passing.
+
+```bash
+python -m pytest tests/test_wallet_scoring.py -v
+```
+
+### Bug found and fixed: delay penalty was re-charging in full every tick
+
+First real-data run against `AA1205` (below) surfaced a real bug: the
+delay penalty was being computed from *cumulative* delay state (excess
+minutes beyond grace) but charged in full on every tick, rather than only
+the incremental change since the last tick. Since `actual_dep_utc` is a
+fixed reading once observed (see `apply_match()` in
+`jobs/opensky_matcher.py` — it's only ever set once), a static delay would
+get charged the *same* full penalty every 3-minute poll for the rest of
+the flight. Confirmed extrapolating to roughly -$4,200 on a $100 stake
+over a flight's remaining airtime — wildly outside spec section 7's own
+"capped at a survivable level" design goal.
+
+**Fix** (spec section 7 now has the corrected model, and
+`wallet_picks.last_charged_delay_minutes` persists the state):
+
+```
+current   = max(0, observed_delay_minutes - GRACE_MINUTES)
+increment = max(0, current - last_charged_delay_minutes)
+charge    = -1% * increment * stake * volatility_multiplier
+last_charged_delay_minutes = current
+```
+
+Applied consistently to both the in-progress delay penalty (departure
+delay) and the landed-late penalty (arrival delay) — `last_charged_delay_minutes`
+is one continuous "how much lateness has already been billed" counter
+across both phases, so a pick that already paid for some in-progress delay
+doesn't get double-charged for that same stretch again on landing.
+
+Cancellation/diversion terminality (pick resolves, no further ticks) is
+now explicit in code via a `TERMINAL_EVENTS` table plus an assertion in
+`wallet_engine.process_pick()` that refuses to process a non-active pick,
+rather than relying implicitly on the caller's `status='active'` query
+filter.
+
+### Real-data sanity check: AA1205
+
+Per M2c, `AA1205` (MCO→LAX) had never been matched by our automated
+pipeline — no `actual_dep_utc` on record. You confirmed out-of-band that
+it's genuinely running ~1hr late and still on the ground; we agreed (via a
+clarifying question, since the two interpretations require materially
+different code) to manually set `actual_dep_utc = scheduled_dep_utc +
+60min` and `status='departed'` on its real `flight_instances` row — as if
+OpenSky had observed the late departure — rather than build a new
+"delayed-but-not-actually-departed-yet" code path the spec's formula
+doesn't describe.
+
+Created a real test wallet ($1,000) and a $100 stake pick against that
+flight_instance, using AA1205's *real* `delay_stddev` (165.53) against the
+*real* active-pool average (97.60) — a genuine 1.696x multiplier, no
+clipping needed. Simulated 4 ticks:
+
+| tick | delay | event | delta |
+|---|---|---|---|
+| 1 | 60 min (first observation) | delay_penalty | **-$76.3167** |
+| 2 | 60 min (unchanged) | delay_penalty | **$0.0000** |
+| 3 | 60 min (unchanged) | delay_penalty | **$0.0000** |
+| 4 | 75 min (delay grew 15 min) | delay_penalty | **-$25.4389** |
+
+Verified by hand: tick 1 = 45 excess min × 1%/min × $100 × 1.696x =
+-$76.3167. Tick 4 = only the incremental 15 min × 1%/min × $100 × 1.696x =
+-$25.4389, not the full 60 min. Sum of all 4 charges (-$101.7556) exactly
+equals one single charge for the final 60-min total excess computed
+independently — no double-charging, no under-charging, to the penny.
+Final `wallet.balance` = $898.2444 ($1,000 − $76.3167 − $25.4389),
+`last_charged_delay_minutes` = 60.00. Real flight, real volatility data,
+real formula, real bug, real fix.
+
+Test data (user/wallet/pick/events) was deleted and `AA1205`'s
+`flight_instances` row reverted to its real unobserved state
+(`status='scheduled'`, `actual_dep_utc=NULL`) afterward, so this manual
+injection doesn't contaminate future real polls or development.
+
+### Still flagged: formula behavior worth reviewing before this goes further
+
+**Cancellation/diversion terminality is my inference, not spec text.**
+Spec section 7 lists them as flat percentages in the same table as the
+tick-based gain/penalty; the terminality itself (pick resolves, no further
+ticks) was always the only sensible reading, and is now explicit in code
+(`TERMINAL_EVENTS`) rather than just implicit — but it's still worth an
+explicit product decision since the "resolves the pick" behavior was
+inferred, not originally stated.
+
+**The volatility multiplier is a genuinely wide amplifier (0.5x-3.0x = 6x
+spread between the calmest and stormiest pool flights)**, and it multiplies
+*both* gains and penalties symmetrically. With the repeat-charging bug
+fixed, this is no longer compounding into runaway wallet destruction, but
+the swings themselves are still worth judging on their own terms once more
+real numbers are in.
+
+**`decay_tick` (in the `wallet_event_type` enum) is never produced by this
+formula** — confirmed in the updated spec section 7 as reserved for a
+future idle-wallet-cost mechanic that hasn't been designed yet. Not a bug,
+not required for M3.
+
 ## Not yet built
 
-- Wallet Engine (M3) — runs after each poll, computes wallet balance deltas
+- Frontend / API surface for wallets (explicitly out of scope for M3)

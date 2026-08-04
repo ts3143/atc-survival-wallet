@@ -8,7 +8,10 @@ interval (default 3 minutes), logs the credit cost reported per call
 opensky_raw_poll_log. Then matches callsigns against today's active-pool
 flight_instances (see jobs/opensky_matcher.py) — on a match, updates
 flight_instances.status/actual_dep_utc/actual_arr_utc/current_icao24 and
-writes the matched state vector to state_vector_log.
+writes the matched state vector to state_vector_log. Finally runs one
+Wallet Engine tick (jobs/wallet_engine.py, M3) over every active
+wallet_pick, using whatever flight_instances state resulted from this
+poll's matching.
 
 Auth: OAuth2 client-credentials via src.lib.opensky.TokenManager, verified
 against OpenSky's real docs (see that module's docstring). Tokens expire
@@ -37,6 +40,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from jobs.opensky_matcher import classify_all, process_poll
 from jobs.schema import opensky_raw_poll_log
+from jobs.wallet_engine import run_wallet_tick
 from src.db import SessionLocal
 from src.lib.callsigns import build_pool_lookup
 from src.lib.opensky import (
@@ -129,9 +133,15 @@ def poll_once(token_manager: TokenManager, session, flight_date) -> dict:
     for label, old, new in match_summary["transitions"]:
         print(f"    transition: {label} {old} -> {new}")
 
+    wallet_results = run_wallet_tick(session, occurred_at=polled_at)
+    for r in wallet_results:
+        resolved = f" -> {r['resolved_as']}" if r["resolved_as"] else ""
+        print(f"    wallet: pick {r['pick_id']} {r['event_types']} delta={r['total_delta']:+.4f}{resolved}")
+
     print(
         f"  OK — {result.state_vector_count} state vectors, "
         f"{len(match_summary['matched_flight_definition_ids'])} pool matches, "
+        f"{len(wallet_results)} wallet picks ticked, "
         f"X-Rate-Limit-Remaining={result.rate_limit_remaining}"
     )
     return {
@@ -140,6 +150,7 @@ def poll_once(token_manager: TokenManager, session, flight_date) -> dict:
         "credits_remaining": result.rate_limit_remaining,
         "matched_flight_definition_ids": match_summary["matched_flight_definition_ids"],
         "transitions": match_summary["transitions"],
+        "wallet_results": wallet_results,
     }
 
 

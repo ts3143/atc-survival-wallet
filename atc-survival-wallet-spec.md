@@ -111,6 +111,8 @@ flight_instance_id    UUID FK -> flight_instances
 staked_amount         DECIMAL       -- coins allocated to this pick
 status                ENUM(active, resolved_win, resolved_loss, cashed_out)
 resolved_amount        DECIMAL       -- final payout/loss once flight resolves
+last_charged_delay_minutes  DECIMAL DEFAULT 0  -- persisted state for incremental
+                                                -- delay-penalty charging; see §7 note
 cashed_out_at          TIMESTAMP NULLABLE
 created_at             TIMESTAMP
 ```
@@ -289,6 +291,22 @@ Use these as starting prompts inside the VS Code extension, one milestone at a t
 | On-time resolution bonus (final payout if flight lands within grace) | +15% of stake |
 
 **Why this shape:** tick rates borrow from a "fast/dramatic" variant (real-time tension, visible movement every poll), but catastrophic-event penalties are capped at a survivable level rather than a full wipeout, so one bad break doesn't feel disproportionately punishing before you know how frequently these events actually occur in the curated pool.
+
+**CRITICAL implementation note — charging model must be incremental, not snapshot-based (found via M3 real-data testing):**
+
+The delay penalty ("-1% of stake per minute of delay") describes a *cumulative* quantity (total elapsed delay minutes), not a per-tick event. Naively re-evaluating and charging the full current-delay penalty on every tick causes runaway double/triple/N-charging for any delay that persists across multiple polls — confirmed in testing: a static 60-min-delayed flight (AA1205) charged the identical -$76.32 penalty on 3 consecutive unchanged ticks, which extrapolates to ~-$4,200 on a $100 stake over a flight's full airtime. This violates the "capped at a survivable level" design goal.
+
+**Correct model:** each `wallet_pick` tracks `last_charged_delay_minutes` (persisted state). Each tick:
+1. Compute `current_delay_minutes` fresh from actual vs. scheduled timing (as before)
+2. `increment = max(0, current_delay_minutes - last_charged_delay_minutes)`
+3. Charge only `-1% × increment × stake × volatility_multiplier`
+4. Update `last_charged_delay_minutes = current_delay_minutes`
+
+If delay is unchanged since the last tick, the increment is zero and nothing is charged — this is the expected, correct behavior, not a bug. Base tick gain (+2%/tick) is unaffected by this fix since it was already inherently incremental (one discrete gain event per tick, not derived from cumulative state).
+
+**Terminality (confirmed, not just inferred):** cancellation and diversion penalties are one-time terminal events — applied once, and the pick resolves (no further ticks). This should be made explicit in code, not left implicit.
+
+**`decay_tick` in the wallet_events enum:** currently unused by this formula — no described behavior in this spec calls for it. Leaving it defined but unused for now; likely reserved for a future idle-wallet-cost mechanic (e.g., a small ongoing cost for wallets with no active picks) that hasn't been designed yet. Not a bug, not required for M3.
 
 **Re-tuning checklist for after M0:**
 - [ ] Compare -50%/-25% penalties against actual cancellation_pct/diversion_pct per flight — are rare-event penalties too harsh, or common-event penalties too soft?
