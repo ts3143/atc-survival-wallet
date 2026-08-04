@@ -12,12 +12,13 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Table,
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from src.db import Base
 
@@ -57,4 +58,24 @@ aerodatabox_call_log = Table(
     Column("success", Boolean, nullable=False),
     Column("status_code", Integer, nullable=True),
     Column("error_message", Text, nullable=True),
+)
+
+# Raw /states/all poll responses — temporary storage only, per M2's "store
+# raw responses, don't build matching logic yet" scope. No FK to
+# flight_instances; that comes with the callsign-matching step later.
+opensky_raw_poll_log = Table(
+    "opensky_raw_poll_log",
+    Base.metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("polled_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    Column("lamin", Numeric(8, 4), nullable=False),
+    Column("lomin", Numeric(8, 4), nullable=False),
+    Column("lamax", Numeric(8, 4), nullable=False),
+    Column("lomax", Numeric(8, 4), nullable=False),
+    Column("http_status", Integer, nullable=True),
+    Column("state_vector_count", Integer, nullable=True),
+    Column("credits_remaining", Integer, nullable=True),
+    Column("success", Boolean, nullable=False),
+    Column("error_message", Text, nullable=True),
+    Column("raw_response", JSONB, nullable=True),
 )
