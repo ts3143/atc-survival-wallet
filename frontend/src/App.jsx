@@ -2,6 +2,7 @@ import { NavLink, Route, Routes } from 'react-router-dom'
 import FlightsPage from './pages/FlightsPage.jsx'
 import DraftPage from './pages/DraftPage.jsx'
 import WalletPage from './pages/WalletPage.jsx'
+import MapPage from './pages/MapPage.jsx'
 
 const navLinkClass = ({ isActive }) =>
   `px-3 py-2 rounded ${isActive ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`
@@ -19,6 +20,9 @@ function App() {
             <NavLink to="/wallet" className={navLinkClass}>
               Wallet
             </NavLink>
+            <NavLink to="/map" className={navLinkClass}>
+              Map
+            </NavLink>
           </nav>
         </div>
       </header>
@@ -28,6 +32,7 @@ function App() {
           <Route path="/" element={<FlightsPage />} />
           <Route path="/draft/:flightId" element={<DraftPage />} />
           <Route path="/wallet" element={<WalletPage />} />
+          <Route path="/map" element={<MapPage />} />
         </Routes>
       </main>
     </div>

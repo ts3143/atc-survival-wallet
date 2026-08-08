@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { createWalletPick, getFlight } from '../api.js'
+import { AirportRoute } from '../components/Airport.jsx'
 
 export default function DraftPage() {
   const { flightId } = useParams()
@@ -44,10 +45,13 @@ export default function DraftPage() {
         ← Back to flight pool
       </Link>
 
-      <h1 className="text-xl font-semibold mt-2 mb-1">
-        {flight.carrier_code}
-        {flight.flight_number} — {flight.origin_airport} → {flight.dest_airport}
-      </h1>
+      <div className="flex items-center gap-3 mt-2 mb-1">
+        <h1 className="text-xl font-semibold">
+          {flight.carrier_code}
+          {flight.flight_number}
+        </h1>
+        <AirportRoute origin={flight.origin_airport} dest={flight.dest_airport} />
+      </div>
       <p className="text-sm text-slate-600 mb-4">
         Typical departure {flight.typical_dep_time?.slice(0, 5)} local · On-time{' '}
         {flight.on_time_pct != null ? `${Number(flight.on_time_pct).toFixed(1)}%` : '—'} · Volatility{' '}

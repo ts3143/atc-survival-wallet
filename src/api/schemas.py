@@ -31,6 +31,20 @@ class FlightListItem(BaseModel):
     cancellation_pct: Optional[Decimal] = None
     diversion_pct: Optional[Decimal] = None
     sample_size: Optional[int] = None
+    # IANA zone names, from src.lib.airport_timezones — reused rather than
+    # duplicating a second copy of the same lookup table in the frontend.
+    origin_timezone: Optional[str] = None
+    dest_timezone: Optional[str] = None
+    # From the flight's most recent flight_instance (same "most recent by
+    # flight_date" simplification used elsewhere in this API). status is
+    # "not_scheduled_yet" (not a flight_instances.status enum value — a
+    # synthetic marker) when no flight_instance exists yet for this flight,
+    # rather than erroring.
+    status: str = "not_scheduled_yet"
+    scheduled_dep_utc: Optional[datetime] = None
+    scheduled_arr_utc: Optional[datetime] = None
+    actual_dep_utc: Optional[datetime] = None
+    actual_arr_utc: Optional[datetime] = None
 
 
 class FlightInstanceOut(BaseModel):
@@ -60,6 +74,13 @@ class PickFlightSummary(BaseModel):
     flight_number: str
     origin_airport: str
     dest_airport: str
+    # IANA zone names (e.g. "America/Los_Angeles"), from
+    # src.lib.airport_timezones — reused here rather than duplicating a
+    # second copy of the same lookup table in the frontend. None if the
+    # airport isn't in that table (shouldn't happen for pool airports, but
+    # not guaranteed for arbitrary ones).
+    origin_timezone: Optional[str] = None
+    dest_timezone: Optional[str] = None
 
 
 class WalletPickOut(BaseModel):
@@ -93,3 +114,38 @@ class WalletEventOut(BaseModel):
     amount: Decimal
     occurred_at: datetime
     event_metadata: Optional[Dict[str, Any]] = None
+
+
+class CurrentPositionOut(BaseModel):
+    """One row = the latest state_vector_log reading for one currently-
+    airborne flight_instance. Map/debugging use only (GET /api/positions/*)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    flight_instance_id: UUID
+    carrier_code: str
+    flight_number: str
+    origin_airport: str
+    dest_airport: str
+    status: str
+    latitude: Optional[Decimal] = None
+    longitude: Optional[Decimal] = None
+    heading: Optional[Decimal] = None
+    altitude_m: Optional[Decimal] = None
+    velocity_ms: Optional[Decimal] = None
+    vertical_rate: Optional[Decimal] = None
+    on_ground: Optional[bool] = None
+    polled_at: datetime
+
+
+class TrackPointOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    latitude: Optional[Decimal] = None
+    longitude: Optional[Decimal] = None
+    altitude_m: Optional[Decimal] = None
+    velocity_ms: Optional[Decimal] = None
+    heading: Optional[Decimal] = None
+    vertical_rate: Optional[Decimal] = None
+    on_ground: Optional[bool] = None
+    polled_at: datetime

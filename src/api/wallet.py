@@ -16,6 +16,7 @@ from src.api.schemas import (
     WalletPickOut,
 )
 from src.db import get_db
+from src.lib.airport_timezones import AIRPORT_TIMEZONES
 from src.models.flight_definitions import FlightDefinition
 from src.models.flight_instances import FlightInstance
 from src.models.wallet_events import WalletEvent
@@ -39,6 +40,8 @@ def _build_pick_out(pick: WalletPick, fi: FlightInstance, fd: FlightDefinition) 
             flight_number=fd.flight_number,
             origin_airport=fd.origin_airport,
             dest_airport=fd.dest_airport,
+            origin_timezone=AIRPORT_TIMEZONES.get(fd.origin_airport),
+            dest_timezone=AIRPORT_TIMEZONES.get(fd.dest_airport),
         ),
         flight_instance=FlightInstanceOut.model_validate(fi),
     )

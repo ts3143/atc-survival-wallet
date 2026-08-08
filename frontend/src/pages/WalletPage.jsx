@@ -1,24 +1,38 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getWallet, getWalletPickEvents } from '../api.js'
+import { AirportRoute } from '../components/Airport.jsx'
+import { StatusBadge, PICK_STATUS_COLORS, FLIGHT_STATUS_COLORS } from '../components/StatusBadge.jsx'
+import { formatLocalDateTime, formatCountdown } from '../dateFormat.js'
 
 const POLL_INTERVAL_MS = 5000
-
-const STATUS_COLORS = {
-  active: 'bg-blue-100 text-blue-800',
-  resolved_win: 'bg-green-100 text-green-800',
-  resolved_loss: 'bg-red-100 text-red-800',
-  cashed_out: 'bg-slate-200 text-slate-700',
-}
 
 function formatMoney(value) {
   return value == null ? '—' : `$${Number(value).toFixed(2)}`
 }
 
-function StatusBadge({ status }) {
+/** "takeoff in 12m" while scheduled, "touchdown in 2h 14m" while airborne
+ * — the two cases explicitly asked for. Other statuses (boarding,
+ * departed, landed, etc.) show nothing rather than guessing at a
+ * countdown that wasn't requested. */
+function CountdownBadge({ status, scheduledDepUtc, scheduledArrUtc }) {
+  let target = null
+  let label = null
+  if (status === 'scheduled') {
+    target = scheduledDepUtc
+    label = 'takeoff'
+  } else if (status === 'airborne') {
+    target = scheduledArrUtc
+    label = 'touchdown'
+  }
+  if (!target) return null
+
+  const info = formatCountdown(target)
   return (
-    <span className={`px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[status] ?? 'bg-slate-100'}`}>
-      {status}
+    <span
+      className={`text-xs px-2 py-0.5 rounded font-medium ${info.overdue ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}`}
+    >
+      {info.overdue ? `${info.label} past sched. ${label}` : `${label} in ${info.label}`}
     </span>
   )
 }
@@ -63,30 +77,52 @@ function PickEvents({ pickId }) {
 
 function PickRow({ pick }) {
   const [expanded, setExpanded] = useState(false)
+  const fi = pick.flight_instance
 
   return (
     <div className="border border-slate-200 rounded bg-white">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="w-full flex items-center justify-between px-3 py-2 text-left"
+        className="w-full flex items-start justify-between px-3 py-2 text-left"
       >
         <div>
-          <span className="font-medium">
-            {pick.flight.carrier_code}
-            {pick.flight.flight_number}
-          </span>{' '}
-          <span className="text-slate-600">
-            {pick.flight.origin_airport} → {pick.flight.dest_airport}
-          </span>
-          <div className="text-xs text-slate-500">
-            flight status: <span className="font-mono">{pick.flight_instance.status}</span> · stake{' '}
-            {formatMoney(pick.staked_amount)}
+          <div className="flex items-center gap-2">
+            <span className="font-medium">
+              {pick.flight.carrier_code}
+              {pick.flight.flight_number}
+            </span>
+            <AirportRoute origin={pick.flight.origin_airport} dest={pick.flight.dest_airport} />
+            <CountdownBadge status={fi.status} scheduledDepUtc={fi.scheduled_dep_utc} scheduledArrUtc={fi.scheduled_arr_utc} />
+          </div>
+          <div className="text-xs text-slate-500 mt-0.5">
+            stake {formatMoney(pick.staked_amount)}
             {pick.resolved_amount != null && <> · resolved amount {formatMoney(pick.resolved_amount)}</>}
           </div>
+
+          <div className="text-xs text-slate-500 mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 max-w-md font-mono">
+            <div>
+              <span className="text-slate-400 font-sans">sched dep </span>
+              {formatLocalDateTime(fi.scheduled_dep_utc, pick.flight.origin_timezone)}
+            </div>
+            <div>
+              <span className="text-slate-400 font-sans">sched arr </span>
+              {formatLocalDateTime(fi.scheduled_arr_utc, pick.flight.dest_timezone)}
+            </div>
+            <div>
+              <span className="text-slate-400 font-sans">actual dep </span>
+              {formatLocalDateTime(fi.actual_dep_utc, pick.flight.origin_timezone)}
+            </div>
+            <div>
+              <span className="text-slate-400 font-sans">actual arr </span>
+              {formatLocalDateTime(fi.actual_arr_utc, pick.flight.dest_timezone)}
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <StatusBadge status={pick.status} />
+
+        <div className="flex items-center gap-2 shrink-0 pl-3">
+          <StatusBadge label="Pick" value={pick.status} colors={PICK_STATUS_COLORS} className="text-right" />
+          <StatusBadge label="Flight" value={fi.status} colors={FLIGHT_STATUS_COLORS} className="text-right" />
           <span className="text-slate-400 text-xs">{expanded ? '▲' : '▼'}</span>
         </div>
       </button>

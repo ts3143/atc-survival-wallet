@@ -52,6 +52,8 @@ RAW_COLUMNS = [
     "CRSArrTime",
     "ArrDelay",
     "ArrDel15",
+    "WheelsOff",
+    "WheelsOn",
     "Cancelled",
     "Diverted",
     "Distance",
@@ -71,6 +73,8 @@ RENAME = {
     "CRSArrTime": "crs_arr_time_local",
     "ArrDelay": "arr_delay_minutes",
     "ArrDel15": "arr_del15",
+    "WheelsOff": "wheels_off_local",
+    "WheelsOn": "wheels_on_local",
     "Cancelled": "cancelled",
     "Diverted": "diverted",
     "Distance": "distance_miles",
@@ -90,6 +94,11 @@ STAGING_COLUMNS = [
     "crs_arr_time_local",
     "arr_delay_minutes",
     "arr_del15",
+    "wheels_off_local",
+    "wheels_on_local",
+    "wheels_off_delay_minutes",
+    "wheels_on_delay_minutes",
+    "wheels_on_del15",
     "cancelled",
     "diverted",
     "distance_miles",
@@ -147,6 +156,27 @@ def parse_hhmm(raw):
     return dt_time(hour=hh, minute=mm)
 
 
+def _time_to_minutes(t):
+    return float("nan") if t is None else float(t.hour * 60 + t.minute)
+
+
+def wheels_delay_minutes_series(wheels_col: pd.Series, crs_col: pd.Series) -> pd.Series:
+    """Signed minutes: wheels_time - crs_time, both local time-of-day
+    (datetime.time, no date) columns, correcting for the wheels event
+    rolling past local midnight relative to the scheduled reference — e.g.
+    scheduled 23:50, actual wheels-on 00:15 the next calendar day: naive
+    diff is -1415 minutes, corrected to +25. BTS's own ArrDelay doesn't
+    need this (it's computed from full date+time internally); we do,
+    since WheelsOff/WheelsOn are raw HHMM local-time-of-day with no
+    published delay equivalent. Vectorized (not a per-row .apply) —
+    this runs over ~7M rows across a 12-month pull.
+    """
+    diff = wheels_col.apply(_time_to_minutes) - crs_col.apply(_time_to_minutes)
+    diff = diff.where(diff >= -720, diff + 1440)
+    diff = diff.where(diff <= 720, diff - 1440)
+    return diff
+
+
 def clean_chunk(df: pd.DataFrame) -> pd.DataFrame:
     df = df.rename(columns=RENAME)
     df["flight_date"] = pd.to_datetime(df["flight_date"]).dt.date
@@ -156,6 +186,13 @@ def clean_chunk(df: pd.DataFrame) -> pd.DataFrame:
     df["dest_airport"] = df["dest_airport"].astype(str).str.strip()
     df["crs_dep_time_local"] = df["crs_dep_time_local"].apply(parse_hhmm)
     df["crs_arr_time_local"] = df["crs_arr_time_local"].apply(parse_hhmm)
+    df["wheels_off_local"] = df["wheels_off_local"].apply(parse_hhmm)
+    df["wheels_on_local"] = df["wheels_on_local"].apply(parse_hhmm)
+    df["wheels_off_delay_minutes"] = wheels_delay_minutes_series(df["wheels_off_local"], df["crs_dep_time_local"])
+    df["wheels_on_delay_minutes"] = wheels_delay_minutes_series(df["wheels_on_local"], df["crs_arr_time_local"])
+    df["wheels_on_del15"] = df["wheels_on_delay_minutes"].apply(
+        lambda v: None if pd.isna(v) else v >= 15
+    )
     df["cancelled"] = df["cancelled"].fillna(0).astype(float).astype(bool)
     df["diverted"] = df["diverted"].fillna(0).astype(float).astype(bool)
     # nullable: NaN for cancelled/diverted flights that never arrived
@@ -207,10 +244,19 @@ AGGREGATE_SQL = text(
         count(DISTINCT flight_date) AS distinct_days,
         count(*) FILTER (WHERE cancelled) AS cancelled_count,
         count(*) FILTER (WHERE diverted) AS diverted_count,
-        100.0 * count(*) FILTER (WHERE NOT cancelled AND NOT diverted AND NOT arr_del15)
-            / NULLIF(count(*) FILTER (WHERE NOT cancelled AND NOT diverted), 0) AS on_time_pct,
-        avg(arr_delay_minutes) FILTER (WHERE NOT cancelled AND NOT diverted) AS avg_delay_minutes,
-        stddev_samp(arr_delay_minutes) FILTER (WHERE NOT cancelled AND NOT diverted) AS delay_stddev,
+        -- on_time_pct/avg_delay_minutes/delay_stddev are WHEELS-based
+        -- (wheels_on_delay_minutes/wheels_on_del15), not BTS's own
+        -- gate-based ArrDelay/ArrDel15 — our OpenSky-based live tracking
+        -- can only ever observe wheels events (airborne/on_ground
+        -- transitions), never gate events, so the historical volatility
+        -- baseline needs to measure the same kind of event. The
+        -- scheduled-side reference (crs_arr_time_local) stays gate-based
+        -- regardless, since BTS publishes no scheduled-wheels equivalent
+        -- — see wheels_delay_minutes_series()'s docstring.
+        100.0 * count(*) FILTER (WHERE NOT cancelled AND NOT diverted AND NOT wheels_on_del15)
+            / NULLIF(count(*) FILTER (WHERE NOT cancelled AND NOT diverted AND wheels_on_del15 IS NOT NULL), 0) AS on_time_pct,
+        avg(wheels_on_delay_minutes) FILTER (WHERE NOT cancelled AND NOT diverted) AS avg_delay_minutes,
+        stddev_samp(wheels_on_delay_minutes) FILTER (WHERE NOT cancelled AND NOT diverted) AS delay_stddev,
         100.0 * count(*) FILTER (WHERE cancelled) / NULLIF(count(*), 0) AS cancellation_pct,
         100.0 * count(*) FILTER (WHERE diverted) / NULLIF(count(*), 0) AS diversion_pct,
         avg(distance_miles) AS avg_distance_miles,

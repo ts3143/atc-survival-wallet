@@ -40,9 +40,28 @@ bts_ontime_performance_raw = Table(
     Column("crs_dep_time_local", Time, nullable=True),
     Column("crs_arr_time_local", Time, nullable=True),
     # signed minutes: negative = early, positive = late. NULL for
-    # cancelled/diverted flights, which never recorded an arrival.
+    # cancelled/diverted flights, which never recorded an arrival. Both
+    # are BTS's own precomputed values (ArrDelay/ArrDel15), which are
+    # GATE-based (ArrTime - CRSArrTime, per BTS's official field
+    # dictionary) — kept for reference/comparison, but flight_volatility_
+    # stats is computed from the wheels-based columns below instead, since
+    # our OpenSky-based live tracking can only ever observe wheels events.
     Column("arr_delay_minutes", Numeric(7, 2), nullable=True),
     Column("arr_del15", Boolean, nullable=True),
+    # Raw wheels-off/on local times (BTS publishes no scheduled-side
+    # equivalent for either — CRSDepTime/CRSArrTime remain the only
+    # available "scheduled" reference, so the wheels-based delay columns
+    # below are actual-wheels vs scheduled-gate, not a fully symmetric
+    # wheels-vs-wheels comparison).
+    Column("wheels_off_local", Time, nullable=True),
+    Column("wheels_on_local", Time, nullable=True),
+    # Computed here (BTS doesn't publish these) as
+    # wheels_time_minutes - crs_time_minutes, with a +1440 correction if
+    # the naive difference is < -720 (implies the actual wheels event
+    # rolled past local midnight relative to the scheduled reference).
+    Column("wheels_off_delay_minutes", Numeric(7, 2), nullable=True),
+    Column("wheels_on_delay_minutes", Numeric(7, 2), nullable=True),
+    Column("wheels_on_del15", Boolean, nullable=True),
     Column("cancelled", Boolean, nullable=False),
     Column("diverted", Boolean, nullable=False),
     Column("distance_miles", Numeric(8, 2), nullable=True),

@@ -49,3 +49,11 @@ export function createWalletPick({ flightDefinitionId, stakedAmount }) {
 export function getWalletPickEvents(pickId) {
   return request(`/api/wallet-picks/${pickId}/events`)
 }
+
+export function getCurrentPositions() {
+  return request('/api/positions/current')
+}
+
+export function getFlightTrack(flightInstanceId) {
+  return request(`/api/positions/${flightInstanceId}/track`)
+}
